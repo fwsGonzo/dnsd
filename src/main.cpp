@@ -75,20 +75,6 @@ struct dns_rr_data_t // resource record data
 };
 #pragma pack(pop)
 
-struct dns_rr_t // resource record
-{
-    unsigned char* name;
-    dns_rr_data_t* resource;
-    unsigned char* rdata;
-};
-
-
-struct dns_query_t // query structure
-{
-    unsigned char*  name;
-    dns_question_t* ques;
-};
-
 #define DNS_PORT         53
 
 #define DNS_QR_QUERY     0
@@ -101,6 +87,7 @@ struct dns_query_t // query structure
 
 #define DNS_TYPE_A    1  // A record
 #define DNS_TYPE_NS   2  // respect mah authoritah
+#define DNS_TYPE_ALIAS 5 // name alias
 
 #define DNS_TYPE_SOA  6  // start of authority zone
 #define DNS_TYPE_PTR 12  // domain name pointer
@@ -118,22 +105,122 @@ enum dns_resp_code_t
 	OP_REFUSED   = 5, // for political reasons
 };
 
+struct dns_query_t // query structure
+{
+    char* name;
+    dns_question_t* ques;
+};
+
 #define SOCKET_ERROR  -1
 typedef int socket_t;
 
 //List of DNS Servers registered on the system
 std::vector<std::string> dns_servers;
 
-void dnsNameFormat(unsigned char* dns, const char* host);
-unsigned char* readName(unsigned char* reader, unsigned char* buffer, int* count);
-void ngethostbyname(const char* host);
+void  dnsNameFormat(char* dns, const char* host);
+char* readName(char* reader, char* buffer, int& count);
+void  ngethostbyname(const char* host);
+
+struct dns_rr_t // resource record
+{
+	dns_rr_t(char*& reader, char* buffer)
+	{
+		int stop;
+		this->name = readName(reader, buffer, stop);
+		reader += stop;
+		
+		this->resource = *(dns_rr_data_t*) reader;
+		reader += sizeof(dns_rr_data_t);
+		
+		// if its an ipv4 address
+		if (ntohs(resource.type) == DNS_TYPE_A)
+		{
+			int len = ntohs(resource.data_len);
+			
+			this->rdata = std::string(reader, len);
+            reader += len;
+        }
+        else
+        {
+            this->rdata = readName(reader, buffer, stop);
+            reader += stop;
+        }
+	}
+	
+    std::string name;
+    std::string rdata;
+    dns_rr_data_t resource;
+    
+    void print()
+    {
+        printf("Name: %s ", name.c_str());
+		switch (ntohs(resource.type))
+		{
+		case DNS_TYPE_A:
+			{
+				long* p = (long*) rdata.c_str();
+				sockaddr_in a;
+				a.sin_addr.s_addr = *p;
+				printf("has IPv4 address: %s", inet_ntoa(a.sin_addr));
+			}
+			break;
+		case DNS_TYPE_ALIAS:
+			printf("has alias: %s", rdata.c_str());
+			break;
+		case DNS_TYPE_NS:
+            printf("has authoritative nameserver : %s", rdata.c_str());
+            break;
+        default:
+			printf("has unknown resource type: %d", ntohs(resource.type));
+		}
+        printf("\n");
+	}
+};
+
+class DnsRequest
+{
+public:
+	DnsRequest()
+	{
+		this->sock = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+		
+		// DNS server
+		dest.sin_family      = AF_INET;
+		dest.sin_port        = htons(DNS_PORT);
+		
+		this->buffer = new char[65536];
+	}
+	~DnsRequest()
+	{
+		delete[] this->buffer;
+	}
+	
+	int  request(const std::string& server, const std::string& hostname);
+	bool receive();
+	
+private:
+	socket_t    sock;
+	sockaddr_in dest;
+	std::string server;
+	std::string hostname;
+	char*       buffer;
+	dns_question_t* qinfo;
+	
+    std::vector<dns_rr_t> answers;
+    std::vector<dns_rr_t> auth;
+    std::vector<dns_rr_t> addit;
+};
 
 int main(void)
 {
 	dns_servers.emplace_back("8.8.8.8");
 	dns_servers.emplace_back("8.8.4.4");
 	
-	ngethostbyname("www.google.com");
+	DnsRequest req;
+	// send request
+	req.request("8.8.8.8", "www.google.com");
+	// receive response
+	req.receive();
 	
 }
 
@@ -143,40 +230,14 @@ unsigned short generateID()
 	return ++id;
 }
 
-void ngethostbyname(const char* host)
+int DnsRequest::request(const std::string& server, const std::string& hostname)
 {
-	unsigned char* buf = new unsigned char[65536];
+	this->server   = server;
+	this->hostname = hostname;
+	dest.sin_addr.s_addr = inet_addr(server.c_str());
 	
-	//the replies from the DNS server
-    dns_rr_t answers[20];
-    dns_rr_t auth[20];
-    dns_rr_t addit[20];
- 
-	dns_header_t*   dns   = nullptr;
-	dns_question_t* qinfo = nullptr;
-	
-	socket_t s = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
-	
-    //Configure the sockaddress structure with information of DNS server
-    struct sockaddr_in dest;
-    dest.sin_family = AF_INET;
-    dest.sin_port   = htons(DNS_PORT);
-    
-    // Set the dns server
-    if (dns_servers.empty())
-    {
-        //Use the open dns servers - 208.67.222.222 and 208.67.220.220
-        dest.sin_addr.s_addr = inet_addr("208.67.222.222");
-    }
-    else
-    {
-        // dns server found on system
-        dest.sin_addr.s_addr = inet_addr(dns_servers[0].c_str());
-    }
-	
-	// Set the DNS structure to standard queries
-	dns = (dns_header_t*) buf;
-	
+	// fill with DNS request data
+	dns_header_t* dns = (dns_header_t*) this->buffer;
 	dns->id = generateID();
 	dns->qr = DNS_QR_QUERY;
 	dns->opcode = 0;       // standard query
@@ -194,26 +255,38 @@ void ngethostbyname(const char* host)
 	dns->add_count  = 0;
 	
     // point to the query portion
-	unsigned char* qname = buf + sizeof(dns_header_t);
+	char* qname = this->buffer + sizeof(dns_header_t);
 	
 	// convert host to dns name format
-	dnsNameFormat(qname, host);
-	qinfo = (dns_question_t*) (qname + strlen((const char*) qname) + 1);
+	dnsNameFormat(qname, hostname.c_str());
+	// length of dns name
+	int namelen = strlen(qname) + 1;
 	
-    qinfo->qtype  = htons(DNS_TYPE_A); // ipv4 address
-    qinfo->qclass = htons(DNS_CLASS_INET);
+	// set question to Internet A record
+	this->qinfo   = (dns_question_t*) (qname + namelen);
+	qinfo->qtype  = htons(DNS_TYPE_A); // ipv4 address
+	qinfo->qclass = htons(DNS_CLASS_INET);
 	
-	printf("\nSending Packet...");
-	int sent = sendto(s, (char*) buf, sizeof(dns_header_t) + (strlen((const char*) qname) + 1) + sizeof(dns_question_t), 0, (struct sockaddr*) &dest, sizeof(dest));
+	printf("Sending Packet...");
+	int sent = sendto(this->sock, this->buffer, sizeof(dns_header_t) + namelen + sizeof(dns_question_t), 0, (struct sockaddr*) &dest, sizeof(dest));
+    
 	if (sent == SOCKET_ERROR)
 	{
 		printf("error %d: %s\n", errno, strerror(errno));
+		return errno;
     }
-    printf("Sent");
-	
+	printf("Sent!\n");
+	return 0;
+}
+
+
+bool DnsRequest::receive()
+{
+    // read reply from DNS server
     socklen_t read_len = sizeof(dest);
-    int readBytes = recvfrom(s, (char*) buf, 65536, 0, (struct sockaddr*) &dest, &read_len);
-    printf("\nReceiving answer...");
+    int readBytes = recvfrom(this->sock, this->buffer, 65536, 0, (struct sockaddr*) &dest, &read_len);
+    
+    printf("Receiving answer...");
     if (readBytes == SOCKET_ERROR)
     {
 		printf("error %d: %s\n", errno, strerror(errno));
@@ -221,182 +294,93 @@ void ngethostbyname(const char* host)
     else if (readBytes == 0)
     {
 		printf("closed prematurely\n");
-		return;
+		return false;
 	}
-    printf("Received.");
+    printf("Received.\n");
 	
-    dns = (dns_header_t*) buf;
+	dns_header_t* dns = (dns_header_t*) this->buffer;
+	
+    printf("The response contains:\n");
+    printf(" %d questions\n", ntohs(dns->q_count));
+    printf(" %d answers\n",   ntohs(dns->ans_count));
+    printf(" %d authoritative servers\n", ntohs(dns->auth_count));
+    printf(" %d additional records\n\n",  ntohs(dns->add_count));
 	
 	// move ahead of the dns header and the query field
-	unsigned char* reader = ((unsigned char*) qinfo) + sizeof(dns_question_t);
-	
-    printf("\nThe response contains : ");
-    printf("\n %d Questions.", ntohs(dns->q_count));
-    printf("\n %d Answers.",   ntohs(dns->ans_count));
-    printf("\n %d Authoritative Servers.",  ntohs(dns->auth_count));
-    printf("\n %d Additional records.\n\n", ntohs(dns->add_count));
+	char* reader = ((char*) this->qinfo) + sizeof(dns_question_t);
 	
 	// reading answers
 	int stop = 0;
 	
     for(int i = 0; i < ntohs(dns->ans_count); i++)
     {
-        answers[i].name = readName(reader, buf, &stop);
-        reader += stop;
-		
-        answers[i].resource = (dns_rr_data_t*) reader;
-        reader += sizeof(dns_rr_data_t);
-		
-		// if its an ipv4 address
-		if (ntohs(answers[i].resource->type) == DNS_TYPE_A)
-        {
-            int len = ntohs(answers[i].resource->data_len);
-            
-            answers[i].rdata = (unsigned char*) malloc(len + 1);
-			
-            for(int j = 0; j < len; j++)
-				answers[i].rdata[j] = reader[j];
-			
-            answers[i].rdata[len] = '\0';
-			
-            reader = reader + ntohs(answers[i].resource->data_len);
-			
-        }
-        else
-        {
-            answers[i].rdata = readName(reader,buf,&stop);
-            reader = reader + stop;
-        }
- 
+		answers.emplace_back(reader, buffer);
     }
  
-    //read authorities
+    // read authorities
     for (int i = 0; i < ntohs(dns->auth_count); i++)
     {
-        auth[i].name = readName(reader, buf, &stop);
-        reader+=stop;
-		
-        auth[i].resource = (dns_rr_data_t*) reader;
-        reader += sizeof(dns_rr_data_t);
-		
-        auth[i].rdata = readName(reader, buf, &stop);
-        reader += stop;
+        auth.emplace_back(reader, buffer);
     }
  
     //read additional
     for (int i = 0; i < ntohs(dns->add_count); i++)
     {
-		addit[i].name = readName(reader, buf, &stop);
-		reader += stop;
-		
-        addit[i].resource = (dns_rr_data_t*) reader;
-        reader += sizeof(dns_rr_data_t);
-		
-        if (ntohs(addit[i].resource->type) == DNS_TYPE_A)
-        {
-			int len = ntohs(addit[i].resource->data_len);
-			
-			addit[i].rdata = new unsigned char[len + 1];
-			memcpy(addit[i].rdata, reader, len);
-			addit[i].rdata[len] = '\0';
-			
-			reader += len;
-		}
-		else
-		{
-			addit[i].rdata = readName(reader, buf, &stop);
-			reader += stop;
-		}
+		addit.emplace_back(reader, buffer);
     }
 	
-	struct sockaddr_in a;
+    // print answers
+    for (auto& answer : answers)
+		answer.print();
+ 
+    // print authorities
+    for (auto& a : auth)
+		a.print();
 	
-    //print answers
-    for (int i = 0; i < ntohs(dns->ans_count); i++)
-    {
-        printf("Name: %s ", answers[i].name);
-		
-        switch (ntohs(answers[i].resource->type))
-        {
-		case DNS_TYPE_A: // IPv4 address
-			{
-				long* p = (long*) answers[i].rdata;
-				a.sin_addr.s_addr = *p; //working without ntohl
-				printf("has IPv4 address : %s", inet_ntoa(a.sin_addr));
-			}
-			break;
-		case 5: // alias
-            printf("has alias name : %s", answers[i].rdata);
-			break;
-		default:
-			printf("unknown answer type: %d", ntohs(answers[i].resource->type));
-		}
-        printf("\n");
-    }
- 
-    //print authorities
-    for (int i = 0; i < ntohs(dns->auth_count); i++)
-    {
-        printf("Name: %s ", auth[i].name);
-        if (ntohs(auth[i].resource->type) == DNS_TYPE_NS)
-        {
-            printf("has authoritative nameserver : %s", auth[i].rdata);
-        }
-        printf("\n");
-    }
- 
-    //print additional resource records
-    for(int i = 0; i < ntohs(dns->add_count); i++)
-    {
-        printf("Additional: %s ",addit[i].name);
-        
-        if (ntohs(addit[i].resource->type) == DNS_TYPE_A)
-        {
-            long* p = (long*) addit[i].rdata;
-            a.sin_addr.s_addr = *p; //working without ntohl
-            printf("has IPv4 address : %s", inet_ntoa(a.sin_addr));
-        }
-        printf("\n");
-    }
+    // print additional resource records
+    for (auto& a : addit)
+		a.print();
 }
 
-unsigned char* readName(unsigned char* reader, unsigned char* buffer, int* count)
+char* readName(char* reader, char* buffer, int& count)
 {
-    unsigned char* name = new unsigned char[256];
+    char* name = new char[256];
     unsigned p = 0;
     unsigned offset = 0;
     bool jumped = false;
 	
-    *count = 1;
+    count = 1;
     name[0] = 0;
 	
+	unsigned char* ureader = (unsigned char*) reader;
+	
     // read the names in 3www6google3com format
-    while (*reader)
+    while (*ureader)
     {
-        if (*reader >= 192)
+        if (*ureader >= 192)
         {
-            offset = (*reader) * 256 + *(reader+1) - 49152; // = 11000000 00000000
-            reader = buffer + offset - 1;
+            offset = (*ureader) * 256 + *(ureader+1) - 49152; // = 11000000 00000000
+            ureader = (unsigned char*) buffer + offset - 1;
             jumped = true; // we have jumped to another location so counting wont go up!
         }
         else
         {
-            name[p++] = *reader;
+            name[p++] = *ureader;
         }
-        reader++;
+        ureader++;
 		
 		// if we havent jumped to another location then we can count up
-        if (jumped == false) *count += 1;
+        if (jumped == false) count++;
     }
 	
     name[p] = '\0'; // zero-term
     
     // number of steps we actually moved forward in the packet
     if (jumped)
-        *count += 1;
+        count++;
 	
     // now convert 3www6google3com0 to www.google.com
-    int len = strlen((const char*) name);
+    int len = strlen(name);
     int i;
     for(i = 0; i < len; i++)
     {
@@ -415,7 +399,7 @@ unsigned char* readName(unsigned char* reader, unsigned char* buffer, int* count
 }
 
 // convert www.google.com to 3www6google3com
-void dnsNameFormat(unsigned char* dns, const char* hostn)
+void dnsNameFormat(char* dns, const char* hostn)
 {
     int lock = 0;
 	int len = strlen(hostn) + 1;

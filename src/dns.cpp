@@ -1,8 +1,30 @@
 #include "dns.hpp"
 
+// cheap implementation of ntohs/htons
+unsigned short ntohs(unsigned short sh)
+{
+	unsigned char* B = (unsigned char*) &sh;
+	
+	return  ((0xff & B[0]) << 8) |
+			((0xff & B[1]));
+}
+#define htons ntohs
+
+// cheap implementation of inet_ntoa
+char* inet_ntoa_simple(unsigned address)
+{
+	char* buffer = new char[16];
+	
+	unsigned char* B = (unsigned char*) &address;
+	sprintf(buffer, "%d.%d.%d.%d", B[0], B[1], B[2], B[3]);
+	
+	return buffer;
+}
+
 dns_rr_t::dns_rr_t(char*& reader, char* buffer)
 {
 	int stop;
+	
 	this->name = readName(reader, buffer, stop);
 	reader += stop;
 	
@@ -31,10 +53,10 @@ void dns_rr_t::print()
 	{
 	case DNS_TYPE_A:
 		{
-			long* p = (long*) rdata.c_str();
-			sockaddr_in a;
-			a.sin_addr.s_addr = *p;
-			printf("has IPv4 address: %s", inet_ntoa(a.sin_addr));
+			long* p    = (long*) rdata.c_str();
+			char* addr = inet_ntoa_simple(*p);
+			printf("has IPv4 address: %s", addr);
+			free(addr);
 		}
 		break;
 	case DNS_TYPE_ALIAS:
@@ -49,16 +71,14 @@ void dns_rr_t::print()
 	printf("\n");
 }
 
-char* dns_rr_t::readName(char* reader, char* buffer, int& count)
+std::string dns_rr_t::readName(char* reader, char* buffer, int& count)
 {
-	char* name = new char[256];
+	std::string name(256, '\0');
 	unsigned p = 0;
 	unsigned offset = 0;
 	bool jumped = false;
 	
 	count = 1;
-	name[0] = 0;
-	
 	unsigned char* ureader = (unsigned char*) reader;
 	
 	while (*ureader)
@@ -78,15 +98,14 @@ char* dns_rr_t::readName(char* reader, char* buffer, int& count)
 		// if we havent jumped to another location then we can count up
 		if (jumped == false) count++;
 	}
-	
-	name[p] = '\0'; // zero-term
+	name.resize(p);
 	
 	// number of steps we actually moved forward in the packet
 	if (jumped)
 		count++;
 	
 	// now convert 3www6google3com0 to www.google.com
-	int len = strlen(name);
+	int len = p; // same as name.size()
 	int i;
 	for(i = 0; i < len; i++)
 	{

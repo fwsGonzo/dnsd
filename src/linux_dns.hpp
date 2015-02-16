@@ -3,6 +3,11 @@
 
 #include "dns_request.hpp"
 
+#include <sys/types.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+
 #define SOCKET_ERROR  -1
 typedef int socket_t;
 

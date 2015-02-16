@@ -38,11 +38,6 @@
 #include <stdio.h>
 #include <string.h>
 
-#include <sys/types.h>
-#include <sys/socket.h>
-#include <netinet/in.h>
-#include <arpa/inet.h>
-
 struct dns_header_t
 {
 	unsigned short id;       // identification number
@@ -120,7 +115,7 @@ struct dns_rr_t // resource record
 	
 private:
 	// read names in 3www6google3com format
-	char* readName(char* reader, char* buffer, int& count);
+	std::string readName(char* reader, char* buffer, int& count);
 };
 
 class DnsRequest

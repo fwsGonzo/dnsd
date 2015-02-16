@@ -16,31 +16,38 @@ public:
 	}
 	
 	// create/open connection to remote part
-	virtual void init(const std::string& nameserver) = 0;
+	virtual void set_ns(const std::string& nameserver) = 0;
 	
 	// send request and read response using send() and read()
-	void request(const std::string& hostname)
+	bool request(const std::string& hostname)
 	{
-		DnsRequest req;
-		
 		// create request to nameserver
 		int messageSize = req.createRequest(buffer, hostname);
 		
 		// send request (Linux)
-		send(hostname, messageSize);
+		if (!send(hostname, messageSize))
+			return false;
 		
 		// read response (Linux)
-		read();
+		if (!read())
+			return false;
 		
 		// parse response from nameserver
 		req.parseResponse(buffer);
+		return true;
+	}
+	void print()
+	{
+		// print all the (currently) stored information
+		req.print(buffer);
 	}
 	
 protected:
 	virtual bool send(const std::string& hostname, int messageSize) = 0;
 	virtual bool read() = 0;
 	
-	char* buffer;
+	DnsRequest req;
+	char*      buffer;
 };
 
 #endif

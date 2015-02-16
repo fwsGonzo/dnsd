@@ -126,22 +126,9 @@ private:
 class DnsRequest
 {
 public:
-	DnsRequest()
-	{
-		this->buffer = new char[65536];
-	}
-	~DnsRequest()
-	{
-		delete[] this->buffer;
-	}
-	
 	int  createRequest(char* buffer, const std::string& hostname);
 	bool parseResponse(char* buffer);
-	
-	char* getBuffer()
-	{
-		return this->buffer;
-	}
+	void print(char* buffer);
 	
 	const std::string& getHostname() const
 	{
@@ -157,7 +144,6 @@ private:
 	void dnsNameFormat(char* dns);
 	
 	std::string hostname;
-	char*       buffer;
 	dns_question_t* qinfo;
 	
     std::vector<dns_rr_t> answers;

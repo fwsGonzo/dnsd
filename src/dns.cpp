@@ -151,40 +151,46 @@ bool DnsRequest::parseResponse(char* buffer)
 {
 	dns_header_t* dns = (dns_header_t*) buffer;
 	
-    printf(" %d questions\n", ntohs(dns->q_count));
-    printf(" %d answers\n",   ntohs(dns->ans_count));
-    printf(" %d authoritative servers\n", ntohs(dns->auth_count));
-    printf(" %d additional records\n\n",  ntohs(dns->add_count));
-	
 	// move ahead of the dns header and the query field
 	char* reader = ((char*) this->qinfo) + sizeof(dns_question_t);
 	
 	// parse answers
     for(int i = 0; i < ntohs(dns->ans_count); i++)
 		answers.emplace_back(reader, buffer);
- 
+	
     // parse authorities
     for (int i = 0; i < ntohs(dns->auth_count); i++)
         auth.emplace_back(reader, buffer);
- 
+	
     // parse additional
     for (int i = 0; i < ntohs(dns->add_count); i++)
 		addit.emplace_back(reader, buffer);
 	
-    // print answers
-    for (auto& answer : answers)
+	return true;
+}
+
+void DnsRequest::print(char* buffer)
+{
+	dns_header_t* dns = (dns_header_t*) buffer;
+	
+	printf(" %d questions\n", ntohs(dns->q_count));
+	printf(" %d answers\n",   ntohs(dns->ans_count));
+	printf(" %d authoritative servers\n", ntohs(dns->auth_count));
+	printf(" %d additional records\n\n",  ntohs(dns->add_count));
+	
+	// print answers
+	for (auto& answer : answers)
 		answer.print();
- 
-    // print authorities
-    for (auto& a : auth)
+	
+	// print authorities
+	for (auto& a : auth)
 		a.print();
 	
-    // print additional resource records
-    for (auto& a : addit)
+	// print additional resource records
+	for (auto& a : addit)
 		a.print();
 	
 	printf("\n");
-	return true;
 }
 
 // convert www.google.com to 3www6google3com

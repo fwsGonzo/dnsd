@@ -14,7 +14,7 @@ OUTPUT   = ./test
 ##############################################################
 
 # code folders
-FILES = main.cpp
+FILES = main.cpp dns.cpp
 
 # compiler
 CC = g++ $(BUILDOPT) -std=c++11

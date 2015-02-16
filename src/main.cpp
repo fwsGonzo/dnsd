@@ -20,6 +20,7 @@ int main(void)
 
 #elif __includeOS__
 #include <os>
+#include "includeDNS.hpp"
 
 void Service::start()
 {

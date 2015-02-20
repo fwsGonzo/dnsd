@@ -1,11 +1,17 @@
 #ifdef __linux__
 #include "linux_dns.hpp"
-
-int main(void)
+#include <iostream>
+int main(int argc, char** argv)
 {
+  if(argc < 2){
+    std::cout << "Usage: " << argv[0] << " <nameserver IP>" << std::endl;
+    return 0;
+  }
+  
+  
 	LinuxDNS dns;
 	// set nameserver
-	dns.set_ns("8.8.8.8");
+	dns.set_ns(argv[1]);
 	
 	// dig up some dirt
 	if (dns.request("www.google.com"))
